@@ -10,3 +10,5 @@ GET http://localhost:3000/json
 ### Items (1, 2 or any more)
 GET http://localhost:3000/items/1
 
+### Using state
+GET http://localhost:3000/state

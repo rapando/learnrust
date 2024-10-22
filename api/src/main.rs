@@ -1,14 +1,15 @@
 use axum::{
-    routing::get,
+    extract::{Path, Request}, 
+    http::StatusCode, 
+    middleware::{ from_fn, Next},
+    response::{IntoResponse, Json, Response},
+    routing::get, 
+    Extension, 
     Router,
-    response::{Json, IntoResponse},
-    http::StatusCode,
-    extract::Path,
-    Extension,
 };
+use std::{sync::Arc, time::{ Instant}};
 use thiserror::Error;
 use serde_json::{Value, json};
-use tower_http::{trace::TraceLayer};
 use tower::ServiceBuilder;
 
 
@@ -31,23 +32,46 @@ impl IntoResponse for AppError {
     }
 }
 
-// application-wide state
 #[derive(Clone)]
-struct State {}
+struct State {
+    app_version: String
+}
+
+// middleware
+async fn logging_middleware(
+    req: Request,
+    next: Next,
+) -> Response {
+    let start_time = Instant::now();
+
+    let response = next.run(req).await;
+
+    let elapsed = start_time.elapsed();
+    println!("request took  {:.2?}", elapsed);
+
+    response
+}
+
 
 #[tokio::main]
 async fn main() {
+    let state = State{
+        app_version: String::from("v0.0.1"),
+    };
 
+    // * When adding middleware you can put them in ServiceBuilder
+    // * when a mw is applied using a layer, it applies to all endpoints after it
+
+    let shared_state = Arc::new(state);
     let app = Router::new()
         .route("/", get(|| async {"hello, world"}))
         .route("/plain", get(plain_text))
         .route("/json", get(json))
         .route("/items/:id", get(handler_that_might_fail))
-        .layer(
-            ServiceBuilder::new()
-            .layer(TraceLayer::new_for_http())
-            .layer(Extension(State{}))
-        );
+        .route("/state", get(handler_with_state))
+        .layer(Extension(shared_state))
+        // .layer(from_fn(logging_middleware))
+        .layer(ServiceBuilder::new().layer(from_fn(logging_middleware)));
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
     axum::serve(listener, app).await.unwrap();
@@ -69,4 +93,18 @@ async fn handler_that_might_fail(Path(id): Path<u32>) -> Result<Json<serde_json:
     } else {
         Err(AppError::NotFound)
     }
+}
+
+#[derive(serde::Serialize)]
+struct VResponse {
+    version: String,
+}
+
+async fn handler_with_state(
+    Extension(state): Extension<Arc<State>>,
+) -> Result<Json<VResponse>, AppError> {
+    let response = VResponse{
+        version: state.app_version.clone(),
+    };
+    Ok(Json(response))
 }
